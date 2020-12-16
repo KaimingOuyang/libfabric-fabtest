@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <getopt.h>
+#include <pip.h>
 
 #include <rdma/fi_errno.h>
 #include <rdma/fi_endpoint.h>
@@ -101,43 +102,62 @@ static int run(void)
 	return ret;
 }
 
+pip_barrier_t gbarrier;
+
 int main(int argc, char **argv)
 {
-	int op, ret;
+	int op, ret = 0;
+	int rank, ntasks;
+	pip_barrier_t *lbarrier;
+	int (*help_run)(void);
 
-	opts = INIT_OPTS;
-	opts.options |= FT_OPT_SIZE;
-	opts.comp_method = FT_COMP_SREAD;
+	pip_init( &rank, &ntasks, NULL, 0 );
+	pip_barrier_init(&gbarrier, ntasks);
+	pip_get_addr(0, "gbarrier", (void**) &lbarrier);
+	pip_get_addr(0, "run", (void**) &help_run);
 
-	hints = fi_allocinfo();
-	if (!hints)
-		return EXIT_FAILURE;
+	if(rank < 1){
+		opts = INIT_OPTS;
+		opts.options |= FT_OPT_SIZE;
+		opts.comp_method = FT_COMP_SREAD;
 
-	while ((op = getopt(argc, argv, "h" ADDR_OPTS INFO_OPTS)) != -1) {
-		switch (op) {
-		default:
-			ft_parse_addr_opts(op, optarg, &opts);
-			ft_parseinfo(op, optarg, hints);
-			break;
-		case '?':
-		case 'h':
-			ft_usage(argv[0], "A client-server example that transfers CQ data.\n");
+		hints = fi_allocinfo();
+		if (!hints)
 			return EXIT_FAILURE;
+
+		while ((op = getopt(argc, argv, "h" ADDR_OPTS INFO_OPTS)) != -1) {
+			switch (op) {
+			default:
+				ft_parse_addr_opts(op, optarg, &opts);
+				ft_parseinfo(op, optarg, hints);
+				break;
+			case '?':
+			case 'h':
+				ft_usage(argv[0], "A client-server example that transfers CQ data.\n");
+				return EXIT_FAILURE;
+			}
 		}
+
+		if (optind < argc)
+			opts.dst_addr = argv[optind];
+
+		hints->domain_attr->cq_data_size = 64;  /* required minimum */
+		hints->mode |= FI_CONTEXT | FI_RX_CQ_DATA;
+
+		hints->caps = FI_MSG;
+		hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
+
+		cq_attr.format = FI_CQ_FORMAT_DATA;
+
+		if(opts.dst_addr){
+			ret = run();
+		}
+		pip_barrier_wait(lbarrier);
+	}else{
+		pip_barrier_wait(lbarrier);
+		ret = help_run();
 	}
-
-	if (optind < argc)
-		opts.dst_addr = argv[optind];
-
-	hints->domain_attr->cq_data_size = 4;  /* required minimum */
-	hints->mode |= FI_CONTEXT | FI_RX_CQ_DATA;
-
-	hints->caps = FI_MSG;
-	hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
-
-	cq_attr.format = FI_CQ_FORMAT_DATA;
-
-	ret = run();
+	
 
 	ft_free_res();
 	return ft_exit_code(ret);
