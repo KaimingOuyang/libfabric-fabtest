@@ -38,7 +38,11 @@
 
 #include <shared.h>
 
-static int run_test()
+
+int rank, ntasks;
+pip_barrier_t gbarrier;
+
+int run_test()
 {
 	int ret;
 	size_t size = 1000;
@@ -95,68 +99,73 @@ static int run(void)
 		ret = ft_init_fabric();
 	if (ret)
 		return ret;
+	
+	if(ntasks == 1)
+		ret = run_test();
+	else
+		pip_barrier_wait(&gbarrier);
 
-	ret = run_test();
-
+	pip_barrier_wait(&gbarrier);
 	fi_shutdown(ep, 0);
 	return ret;
 }
 
-pip_barrier_t gbarrier;
 
 int main(int argc, char **argv)
 {
 	int op, ret = 0;
-	int rank, ntasks;
 	pip_barrier_t *lbarrier;
 	int (*help_run)(void);
 
 	pip_init( &rank, &ntasks, NULL, 0 );
 	pip_barrier_init(&gbarrier, ntasks);
 	pip_get_addr(0, "gbarrier", (void**) &lbarrier);
-	pip_get_addr(0, "run", (void**) &help_run);
+	pip_get_addr(0, "run_test", (void**) &help_run);
+	printf("rank %d - pid %d, run_test %p, help_run %p\n", rank, getpid(), run_test, help_run);
+	fflush(stdout);
+	sleep(8);
 
-	if(rank < 1){
-		opts = INIT_OPTS;
-		opts.options |= FT_OPT_SIZE;
-		opts.comp_method = FT_COMP_SREAD;
+	opts = INIT_OPTS;
+	opts.options |= FT_OPT_SIZE;
+	opts.comp_method = FT_COMP_SREAD;
 
-		hints = fi_allocinfo();
-		if (!hints)
+	hints = fi_allocinfo();
+	if (!hints)
 			return EXIT_FAILURE;
 
-		while ((op = getopt(argc, argv, "h" ADDR_OPTS INFO_OPTS)) != -1) {
+	while ((op = getopt(argc, argv, "h" ADDR_OPTS INFO_OPTS)) != -1) {
 			switch (op) {
-			default:
-				ft_parse_addr_opts(op, optarg, &opts);
-				ft_parseinfo(op, optarg, hints);
-				break;
-			case '?':
-			case 'h':
-				ft_usage(argv[0], "A client-server example that transfers CQ data.\n");
-				return EXIT_FAILURE;
+					default:
+							ft_parse_addr_opts(op, optarg, &opts);
+							ft_parseinfo(op, optarg, hints);
+							break;
+					case '?':
+					case 'h':
+							ft_usage(argv[0], "A client-server example that transfers CQ data.\n");
+							return EXIT_FAILURE;
 			}
-		}
+	}
 
-		if (optind < argc)
+	if (optind < argc)
 			opts.dst_addr = argv[optind];
 
-		hints->domain_attr->cq_data_size = 64;  /* required minimum */
-		hints->mode |= FI_CONTEXT | FI_RX_CQ_DATA;
+	hints->domain_attr->cq_data_size = 64;  /* required minimum */
+	hints->mode |= FI_CONTEXT | FI_RX_CQ_DATA;
 
-		hints->caps = FI_MSG;
-		hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
+	hints->caps = FI_MSG;
+	hints->domain_attr->mr_mode = FI_MR_LOCAL | OFI_MR_BASIC_MAP;
 
-		cq_attr.format = FI_CQ_FORMAT_DATA;
+	cq_attr.format = FI_CQ_FORMAT_DATA;
 
-		if(opts.dst_addr){
-			ret = run();
-		}
-		pip_barrier_wait(lbarrier);
-	}else{
+	if(rank == 0)
+		ret = run();
+	else{
 		pip_barrier_wait(lbarrier);
 		ret = help_run();
+		pip_barrier_wait(lbarrier);
 	}
+
+		
 	
 
 	ft_free_res();
